@@ -9,7 +9,7 @@
 #include "radio_task.h"
 #include "crypto.h"
 #include "display_task.h"
-#include "radio_task.c"
+
 
 QueueHandle_t tx_to_lora_queue;
 QueueHandle_t rx_from_lora_queue;

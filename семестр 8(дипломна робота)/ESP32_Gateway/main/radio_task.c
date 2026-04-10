@@ -32,25 +32,37 @@ typedef struct {
 
 static TrackedDevice_t device_table[MAX_TRACKED_DEVICES] = {0};
 
+// --- ФУНКЦІЯ ПЕРЕВІРКИ ПАКЕТУ (Математичний захист) ---
 static bool is_packet_new(uint16_t dev_id, uint16_t counter) {
     int empty_slot = -1;
 
     for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (device_table[i].is_active && device_table[i].device_id == dev_id) {
             
-            // Вираховуємо різницю. Оскільки лічильник 13-бітний, 
-            // переповнення відбувається на числі 8191.
+            // Вираховуємо різницю (з урахуванням переповнення 13-бітного лічильника на числі 8191)
             int16_t diff = counter - device_table[i].last_counter;
-            if (diff < -4096) diff += 8192; // Корекція при перевалі через 8191 в 0
+            if (diff < -4096) diff += 8192; 
             
             if (diff > 0) {
+                // ВАРІАНТ 1: Плата була поза зоною дії і повернулася.
+                // Лічильник просто пішов уперед. Приймаємо без питань!
                 device_table[i].last_counter = counter; 
-                return true; // Це свіжий пакет!
+                return true;
+            } 
+            else if (counter <= 5 && diff < -10) {
+                // ВАРІАНТ 2: Детектор перезавантаження (Жорсткий рестарт)
+                // Якщо новий лічильник дуже малий (1..5), а старий був великим (наприклад, 88),
+                // це означає, що плата втратила живлення і почала рахувати з нуля.
+                ESP_LOGW(TAG, "Виявлено перезавантаження пристрою ID %d! Скидаємо лічильник на %d", dev_id, counter);
+                device_table[i].last_counter = counter;
+                return true;
             }
-            return false; // Це старий пакет або дублікат-луна
+
+            // Якщо ми дійшли сюди, значить це реально дублікат-луна або хакерська атака старим пакетом
+            return false; 
         }
         if (!device_table[i].is_active && empty_slot == -1) {
-            empty_slot = i; // Запам'ятовуємо перше вільне місце
+            empty_slot = i; 
         }
     }
 
@@ -58,14 +70,13 @@ static bool is_packet_new(uint16_t dev_id, uint16_t counter) {
         device_table[empty_slot].device_id = dev_id;
         device_table[empty_slot].last_counter = counter;
         device_table[empty_slot].is_active = true;
-        ESP_LOGI(TAG, "Додано новий пристрій ID %d у базу. Лічильник стартував з %d", dev_id, counter);
+        ESP_LOGI(TAG, "Додано новий пристрій ID %d у базу. Лічильник: %d", dev_id, counter);
         return true;
     }
 
     ESP_LOGW(TAG, "Таблиця пристроїв переповнена! Пакет ігнорується.");
     return false; 
 }
-
 static void IRAM_ATTR lora_dio0_isr_handler(void* arg) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     xSemaphoreGiveFromISR(rx_interrupt_sem, &xHigherPriorityTaskWoken);

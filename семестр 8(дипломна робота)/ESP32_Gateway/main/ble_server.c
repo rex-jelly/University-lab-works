@@ -85,21 +85,19 @@ static void ble_notify_task(void* param)
     LoRaPacket_t rx_packet;
 
     while (1) {
-        if (is_phone_connected && is_notify_enabled) {
+        // Чекаємо пакет з ефіру ЗАВЖДИ (щоб черга не забивалася)
+        if (xQueueReceive(rx_from_lora_queue, &rx_packet, portMAX_DELAY) == pdTRUE) {
             
-            if (xQueueReceive(rx_from_lora_queue, &rx_packet, portMAX_DELAY) == pdTRUE) {
-                
+            // Якщо телефон підключений - миттєво відправляємо йому дані
+            if (is_phone_connected) {
                 esp_ble_gatts_send_indicate(
                     gl_profile_tab[PROFILE_APP_ID].gatts_if, 
                     gl_profile_tab[PROFILE_APP_ID].conn_id, 
                     tx_gps_char_handle, 
-                    16, rx_packet.raw, false); // Відправляємо розпаковані 16 байт
+                    16, rx_packet.raw, false);
                     
                 ESP_LOGI(GATTS_TAG, "Відправлено 16 байт (GPS Data) на телефон!");
             }
-            
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(1000)); 
         }
     }
 }
@@ -108,8 +106,19 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 {
     switch (event) {
     case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
+        ESP_LOGI(GATTS_TAG, "Налаштування реклами завершено. Запускаємо ефір...");
         esp_ble_gap_start_advertising(&adv_params);
         break;
+        
+    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+        // Ця подія спрацьовує, коли антена фізично почала випромінювати сигнал
+        if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGI(GATTS_TAG, ">>> BLE РЕКЛАМА УСПІШНО ЗАПУЩЕНА! Плата в ефірі! <<<");
+        } else {
+            ESP_LOGE(GATTS_TAG, ">>> ПОМИЛКА ЗАПУСКУ BLE РЕКЛАМИ! <<<");
+        }
+        break;
+        
     default:
         break;
     }
