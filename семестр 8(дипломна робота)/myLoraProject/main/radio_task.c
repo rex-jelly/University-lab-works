@@ -22,7 +22,7 @@ static const char *TAG = "LORA_RADIO";
 // Макроси для розрізання 16 біт на (3 біти hops + 13 біт counter)
 #define GET_COUNTER(val) ((val) & 0x1FFF)     // Маска для нижніх 13 біт
 #define GET_HOPS(val)    ((val) >> 13)        // Зсув для верхніх 3 біт
-
+uint16_t my_device_id = 0xFFFF;
 // Структура для запису в таблицю
 typedef struct {
     uint16_t device_id;
@@ -32,11 +32,13 @@ typedef struct {
 
 static TrackedDevice_t device_table[MAX_TRACKED_DEVICES] = {0};
 
-// --- ФУНКЦІЯ ПЕРЕВІРКИ ПАКЕТУ (Математичний захист) ---
+// ФУНКЦІЯ ПЕРЕВІРКИ ПАКЕТУ
 static bool is_packet_new(uint16_t dev_id, uint16_t counter) {
     int empty_slot = -1;
-
+ if(my_device_id == dev_id)
+ return false;
     for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
+       
         if (device_table[i].is_active && device_table[i].device_id == dev_id) {
             
             // Вираховуємо різницю (з урахуванням переповнення 13-бітного лічильника на числі 8191)
@@ -44,15 +46,14 @@ static bool is_packet_new(uint16_t dev_id, uint16_t counter) {
             if (diff < -4096) diff += 8192; 
             
             if (diff > 0) {
-                // ВАРІАНТ 1: Плата була поза зоною дії і повернулася.
+                // лата була поза зоною дії і повернулася.
                 // Лічильник просто пішов уперед. Приймаємо без питань!
                 device_table[i].last_counter = counter; 
                 return true;
             } 
             else if (counter <= 5 && diff < -10) {
-                // ВАРІАНТ 2: Детектор перезавантаження (Жорсткий рестарт)
-                // Якщо новий лічильник дуже малий (1..5), а старий був великим (наприклад, 88),
-                // це означає, що плата втратила живлення і почала рахувати з нуля.
+                // Детектор перезавантаження (Жорсткий рестарт)
+                // Якщо новий лічильник дуже малий (1..5), а старий був великим (наприклад, 88), це означає, що плата втратила живлення і почала рахувати з нуля.
                 ESP_LOGW(TAG, "Виявлено перезавантаження пристрою ID %d! Скидаємо лічильник на %d", dev_id, counter);
                 device_table[i].last_counter = counter;
                 return true;
@@ -107,8 +108,27 @@ static void lora_rx_task(void *pvParameters) {
                         } 
                         else if (is_packet_new(rx_packet.data.device_id, seq)) {
                             ESP_LOGI(TAG, "RX: Прийнято СВІЖИЙ пакет! ID: %d, Seq: %d, Hops: %d", rx_packet.data.device_id, seq, hops);
+                        
+                            //Віддаємо отримані координати на свій телефон
                             xQueueSend(rx_from_lora_queue, &rx_packet, 0);
-                        } else {
+
+                            if (hops + 1 < MAX_HOPS_ALLOWED) {
+                                LoRaPacket_t relay_packet;
+                                memcpy(&relay_packet, &rx_packet, sizeof(LoRaPacket_t)); 
+                                    uint8_t new_hops = hops + 1;
+                                relay_packet.data.counter_hops = (new_hops << 13) | (seq & 0x1FFF);
+
+                                // Оскільки ми змінили дані (hops), треба НАНОВО ЗАШИФРУВАТИ 
+                                // пакет і перерахувати CRC перед тим, як кидати в ефір!
+                                encrypt_packet(&relay_packet);
+                                    ESP_LOGI(TAG, "MESH: Ретрансляція пакету від ID %d. Новий Hops: %d", rx_packet.data.device_id, new_hops);
+                                    // Кидаємо у чергу на передачу в ефір
+                                    xQueueSend(tx_to_lora_queue, &relay_packet, 0);
+                                }
+                            } else {
+                                ESP_LOGI(TAG, "MESH: Ретрансляція зупинена. Досягнуто ліміт стрибків (%d)", MAX_HOPS_ALLOWED);
+                            }
+                        }else {
                             ESP_LOGI(TAG, "RX: Дублікат пакету від ID %d. Ігноруємо.", rx_packet.data.device_id);
                         }
                     }
@@ -118,7 +138,7 @@ static void lora_rx_task(void *pvParameters) {
             }
         }
     }
-}
+
 
 static void lora_tx_task(void *pvParameters) {
     LoRaPacket_t tx_packet;

@@ -28,7 +28,7 @@ static uint8_t calculate_crc8(const uint8_t *data, size_t len) {
     return crc;
 }
 
-// Читання ключа з NVS при старті ---
+// Читання ключа з NVS при старті
 void crypto_init(void) {
     nvs_handle_t my_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &my_handle);

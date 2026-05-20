@@ -85,7 +85,7 @@ static void ble_notify_task(void* param)
     LoRaPacket_t rx_packet;
 
     while (1) {
-        // Чекаємо пакет з ефіру ЗАВЖДИ (щоб черга не забивалася)
+        // Чекаємо пакет з ефіру
         if (xQueueReceive(rx_from_lora_queue, &rx_packet, portMAX_DELAY) == pdTRUE) {
             
             // Якщо телефон підключений - миттєво відправляємо йому дані
@@ -214,11 +214,17 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                 xQueueSend(tx_to_lora_queue, &tx_packet, portMAX_DELAY);
                 
                 ESP_LOGI(GATTS_TAG, "Координати запаковано (Seq: %d), зашифровано і передано в LoRa!", global_packet_seq);
-            } else {
+            } else if (param->write.len == 2) {
+                extern uint16_t my_device_id;
+                // Збираємо 2 байти в одне число (Little Endian)
+                my_device_id = param->write.value[0] | (param->write.value[1] << 8);
+                ESP_LOGI(GATTS_TAG, "Отримано налаштування: Мій ID тепер %d", my_device_id);
+            }
+            else {
                 ESP_LOGW(GATTS_TAG, "GPS Packet must be 16 bytes!");
             }
         }
-        
+    
         // ВАРІАНТ 3: Телефон прислав ПАРОЛЬ AES
         else if (param->write.handle == pass_char_handle) {
             if (param->write.len == 16) {
